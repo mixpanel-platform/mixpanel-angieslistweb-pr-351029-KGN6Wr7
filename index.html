@@ -1,50 +1,255 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
   <head>
-    <meta charset="utf-8">
     <link rel="stylesheet" type="text/css" href="https://cdn.mxpnl.com/libs/mixpanel-platform/css/reset.css">
     <link rel="stylesheet" type="text/css" href="https://cdn.mxpnl.com/libs/mixpanel-platform/build/mixpanel-platform.v0.latest.min.css">
     <script src="https://cdn.mxpnl.com/libs/mixpanel-platform/build/mixpanel-platform.v0.latest.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/3.5.5/d3.min.js" charset="utf-8"></script>
+    <style>
+     #run {
+        margin-top:5px;
+        float:left;
+        clear:both;
+        padding: 6px 12px;
+        background-color: #61adf0;
+        background-image: -webkit-linear-gradient(#6ab5f2,#53a0ee);
+        background-image: linear-gradient(#6ab5f2,#53a0ee);
+        box-shadow: inset 0 1px 1px #77bdf4,0 2px 2px -1px rgba(0,0,0,0.2);
+        text-transform: uppercase;
+        border: 1px solid #4d93d7;
+        color: #fff;
+        text-shadow: 0 -1px 0 rgba(0,0,0,0.2);
+        border-radius: 3px;
+        cursor: pointer;
+        font-weight: bold;
+      }
+
+      .node circle {
+        fill: #fff;
+        stroke: steelblue;
+        stroke-width: 1.5px;
+      }se
+
+      .node {
+        font: 10px sans-serif;
+
+      }
+
+      .link {
+        fill: none;
+        stroke: steelblue;
+        stroke-linecap: round;
+      }
+    </style>
   </head>
-  <body class="mixpanel-platform-body">
-    <div class="mixpanel-platform-section">
+  <body class="mixpanel-platform-body" style="overflow-x:scroll;">
       <div id="eventSelect" style="float: left;"></div>
-      <div id="by" class="mixpanel-platform-label" style="margin-left: 10px; display: none;">by</div>
-      <div id="propSelect" style="float: left;"></div>
       <div id="dateSelect" style="float: right;"></div>
       <div style="clear: both;"></div>
-      <div id="graph"></div>
-    </div>
-    <div id="table"></div>
+      <button id="run" value="Run" style="display: none;">Run</button>
     <script>
-      var eventSelect = $('#eventSelect').MPEventSelect();
-      var propSelect  = $('#propSelect').MPPropertySelect();
-      var dateSelect  = $('#dateSelect').MPDatepicker();
-      var eventGraph  = $('#graph').MPChart({chartType: 'line'});
-      var eventTable  = $('#table').MPTable({
-        showPercentages: true,
-        firstColHeader: 'Event'
-      });
-
-      var runQuery = function() {
-        var eventName = eventSelect.MPEventSelect('value'),
-            propName  = propSelect.MPPropertySelect('value'),
-            dateRange = dateSelect.MPDatepicker('value');
-
-        if (eventName) {
-          MP.api.segment(eventName, propName, dateRange).done(function(results) {
-            eventGraph.MPChart('setData', results);
-            eventTable.MPTable('setData', results);
+      MP.api.MAX_SIMULTANEOUS_QUERIES = 30
+      var datesSelector = $('#dateSelect').MPDatepicker();
+      var rootEventSelect = $('#eventSelect').MPEventSelect();
+      /* Global Event List */
+      var rootEvent;
+      var objs = {};
+      var graphData = {}
+      
+      var params = {
+        from: moment().subtract(30, 'days'),
+        to: moment(),
+        length: 14,
+        limit: 200,
+        interval: 90
+      }
+  
+      var width = 960;
+      var height = 750;
+      var cluster = d3.layout.cluster()
+        .size([height, width - 160]);
+      var diagonal = d3.svg.diagonal()
+        .projection(function(d) { return [d.y, d.x]; });
+  
+      var svg = d3.select("body").append("svg")
+        .attr("width", width)
+        .attr("height", height)
+        .call(d3.behavior.zoom().on("zoom", function () {
+                svg.attr("transform", "translate(" + d3.event.translate + ")" + " scale(" + d3.event.scale + ")")
+              })
+            )
+        .append("g")
+        .attr("transform", "translate(40,0)");
+  
+      function addNode(data){
+  
+        d3.selectAll(".text").remove();
+        d3.selectAll(".node").remove();
+        d3.selectAll(".link").remove();
+  
+        var nodes = cluster.nodes(data),
+          links = cluster.links(nodes);
+  
+        nodes.forEach(function(d) { d.y = d.depth * 180; });
+  
+        var allLinks = svg.selectAll(".link").data(links);
+        var link = allLinks.enter().append("path")
+          .attr("class", "link")
+          .style('stroke-width', function(d) {
+            return ( d.target.root * .2 );
           });
-        }
+  
+        allLinks.transition().duration(1000).attr("d", diagonal);
+  
+        var allNodes = svg.selectAll(".node").data(nodes);
+        var node = allNodes.enter().append("g")
+          .attr("class", "node")
+          .attr("transform", function(d) { return "translate(" + d.y + "," + d.x + ")"; })
+          .style('cursor','pointer')
+          .style('opacity', 0.6)
+          .on('mouseover', function(d){
+              d3.select(this).style('opacity', 1.0)
+              d3.select("text").style('opacity', 1.0);
+          })
+          .on('mouseout', function(d){
+            d3.select(this).style('opacity', 0.6)
+          })
+          .on('click', function(val){
+              console.log (val)
+              if (val.children) {
+                val._children = val.children;
+                val.children = null;
+                addNode(graphData)
+              } else if (val._children) {
+                val.children = val._children;
+                addNode(graphData);
+              } else {
+                val._children = true ;
+                nodeQuery(objs, val);
+              }
+          });
+  
+        node.append('svg:title')
+          .text(function(d) {
+            var count = 'Count: ' + String(d.count) + '\n';
+            var parent = 'Conversion From Parent Event: ' + String(d.conversion) + '%\n';
+            var root = 'Conversion From Root Event: ' + String(d.root) + '%';
+            return count + parent + root });
+        node.append("circle")
+            .attr("r", 4.5);
+  
+        node.append("text")
+          .attr("dx", function(d) { return d.children ? 0 : 8; })
+          .attr("dy", function(d) { return d.children ? 18 : 3; })
+          .text(function(d) { return d.name; })
+          .attr("text-anchor", function(d){
+            return ( d.children ? "middle" : undefined );
+          });
       };
-      eventSelect.on('change', function(e, eventName) {
-        propSelect.MPPropertySelect('setEvent', eventName);
-        $("#by").show();
-        runQuery();
+  
+      /* Let the Funnel Queries Begin... */
+  
+      var nodeQuery = function(event_list, node){
+        /* Dict with top counts for each event */
+        var nodes = {};
+        var promises = []
+          
+        _.each(_.keys(event_list), function(key) {
+          var event = event_list[key];
+          var parent = node;
+          var selector_str;
+          var events = [];
+          while (parent){
+            events.push({'event': event});
+            event = parent.name
+            parent = parent.parent
+          }
+          events.push({'event': event});
+          events.reverse();
+          events.push(params);
+          promises.push(MP.api.funnel.apply(MP.api, events));
+        });
+
+          Promise.all(promises).then(function(promiseArray){
+            _.each(promiseArray, function(data){
+                total = 0;
+                var length = data.length - 1;
+                _.each(_.values(data[length]), function(funnelObj){ total += funnelObj.count });
+                nodes[_.values(data[length])[0].event] = total;
+            });
+          }).then(function(){
+             /* Add Data to Graph Data */
+             var total = _.values(nodes).reduce(function(a , b){return a + b;});
+  
+             _.each(_.keys(nodes), function(key){
+               /*
+                  Build a node object with the conversion percentage and other meta data and add it to the children
+                  of the parent node
+               */
+                var conversion = Math.floor(nodes[key] / node.count * 100);
+                var root = Math.floor(nodes[key] / graphData.count * 100);
+                if (conversion < 2 ) { return };
+                if (node.children) {
+                    node.children.push({
+                      'name':key,
+                      'root': root,
+                      'conversion': conversion,
+                      'count':nodes[key]
+                    });
+                } else {
+                    node.children = [{
+                      'name':key,
+                      'root': root,
+                      'conversion': conversion,
+                      'count':nodes[key]
+                    }];
+                }
+             })
+             addNode(graphData);
+             console.log(graphData)
+          });
+      }
+      rootEventSelect.on('change', function(e){
+        $('#run').show();
+      })
+      $('#run').on('click', function(e){
+        var rootEvent = rootEventSelect.MPEventSelect('value')
+        var dates = datesSelector.MPDatepicker('value')
+        
+        params.from = dates.from;
+        params.to = dates.to;
+        
+        /* This Event Represents the Origin of the User Flow Diagram. */
+        
+        graphData = {
+          'name': rootEvent,
+          'conversion': 100,
+          'root': 100,
+        };
+        
+        var rootParams = {
+          from: params.from,
+          to: params.to,
+          type: 'unique',
+          interval: 32,
+        };
+        
+        /* Top Event Queries */
+        var topEventsParams = {'limit':'30'};
+        var topEvents = MP.api.topEvents(topEventsParams);
+  
+        /* Funnel Queries */
+        $.when(topEvents).done(function(events){
+            objs = events.values();
+        });
+        /* Find the Root Event Count */
+        var rootEventCount = MP.api.segment(rootEvent,rootParams);
+        
+        $.when(rootEventCount).done(function(eventCount){
+            graphData.count = eventCount.sum().values()[rootEvent];
+            addNode(graphData);
+        });
       });
-      propSelect.on('change', runQuery);
-      dateSelect.on('change', runQuery);
     </script>
   </body>
 </html>
